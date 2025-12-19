@@ -57,10 +57,10 @@
 
 ```bash
 # 下载脚本
-wget https://your-repo/setup.sh
+wget https://raw.githubusercontent.com/chris-nian/easy-docker-singbox/refs/heads/main/setup.sh
 
 # 或使用 curl
-curl -O https://your-repo/setup.sh
+curl -O https://raw.githubusercontent.com/chris-nian/easy-docker-singbox/refs/heads/main/setup.sh
 
 # 添加执行权限
 chmod +x setup.sh
