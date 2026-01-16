@@ -4,7 +4,7 @@
 # 支持协议: Vless-reality, Vmess-ws, Hysteria2, Tuic-v5
 # 支持功能: 安装、卸载、启动、停止、重启、查看状态
 
-set -e
+# 移除 set -e，改用手动错误处理
 
 # 颜色定义
 red(){ echo -e "\033[31m\033[01m$1\033[0m"; }
@@ -14,7 +14,11 @@ blue(){ echo -e "\033[36m\033[01m$1\033[0m"; }
 
 # 检查root权限 (只在安装时检查)
 check_root() {
-    [[ $EUID -ne 0 ]] && red "请以root模式运行脚本" && exit 1
+    if [[ $EUID -ne 0 ]]; then
+        red "请以root模式运行脚本"
+        read -p "按回车键返回主菜单..."
+        show_main_menu
+    fi
 }
 
 # 工作目录
@@ -840,8 +844,8 @@ show_main_menu() {
     echo ""
     
     # 检查安装状态
-    if docker ps -a | grep -q sing-box; then
-        if docker ps | grep -q sing-box; then
+    if command -v docker &> /dev/null && docker ps -a 2>/dev/null | grep -q sing-box; then
+        if docker ps 2>/dev/null | grep -q sing-box; then
             green "当前状态: ✓ 运行中"
         else
             yellow "当前状态: ● 已停止"
@@ -895,7 +899,6 @@ show_main_menu() {
         7)
             check_root
             uninstall
-            exit 0
             ;;
         0)
             echo ""
@@ -938,6 +941,15 @@ uninstall() {
     yellow "    Sing-box Docker 卸载程序"
     yellow "=========================================="
     echo ""
+    
+    # 检查Docker是否安装
+    if ! command -v docker &> /dev/null; then
+        red "Docker 未安装，无需卸载"
+        echo ""
+        sleep 2
+        show_main_menu
+        return
+    fi
     
     read -p "$(red '确认卸载 Sing-box Docker? [y/N]: ')" confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
@@ -1033,15 +1045,24 @@ restart_service() {
 show_status() {
     clear
     echo ""
+    
+    # 检查Docker是否安装
+    if ! command -v docker &> /dev/null; then
+        red "Docker 未安装"
+        echo ""
+        sleep 2
+        return
+    fi
+    
     green "==================== Sing-box 状态 ===================="
-    if docker ps | grep -q sing-box; then
+    if docker ps 2>/dev/null | grep -q sing-box; then
         green "✓ Sing-box 运行中"
         echo ""
         docker ps | grep sing-box
         echo ""
         green "最近日志:"
-        docker logs --tail 20 sing-box
-    elif docker ps -a | grep -q sing-box; then
+        docker logs --tail 20 sing-box 2>/dev/null || yellow "无法获取日志"
+    elif docker ps -a 2>/dev/null | grep -q sing-box; then
         yellow "⚠ Sing-box 已停止"
         echo ""
         docker ps -a | grep sing-box
