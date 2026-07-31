@@ -20,6 +20,8 @@
 - 🔐 **多协议支持** - 同时配置 4 种主流代理协议
 - 🎯 **自动生成配置** - 自动生成客户端连接链接、二维码和 Clash 配置文件
 - 🔗 **Clash URL 订阅** - 部署后直接生成带随机令牌的订阅链接，可粘贴到客户端自动更新
+- 🚦 **GFW 黑名单分流** - 仅 `gfw.txt` 规则命中的域名走代理，其他流量默认直连
+- 🔄 **规则自动更新** - 客户端每天从公共规则源覆盖更新，不在订阅中内嵌或累积大型列表
 - 🪶 **轻量发布** - 使用约 1–5 MB 的 BusyBox 官方镜像静态发布订阅，无数据库、面板或转换服务
 - 🌐 **双栈支持** - 自动检测 IPv4/IPv6，支持用户选择
 - 🔑 **密钥管理** - 自动生成 UUID、Reality 密钥对、Short ID 等
@@ -48,7 +50,8 @@
 
 - **通用客户端**: 支持上述协议的任意客户端
 - **推荐客户端**: 
-  - Mihomo/Clash Meta 内核客户端（如 Clash Verge Rev、FlClash）
+  - Mihomo/Clash Meta 内核客户端（如 Clash Verge Rev、FlClash、OpenClash）
+  - Stash
   - Shadowrocket (支持二维码扫描)
   - v2rayN/v2rayNG
   - Surge
@@ -110,7 +113,7 @@ docker-singbox/config/
 http://203.0.113.10:12345/随机令牌.yaml
 ```
 
-将该 URL 填入 Mihomo/Clash Meta 客户端的“订阅/配置 URL”即可。还需要在 VPS 防火墙和云厂商安全组中放行脚本显示的订阅 TCP 端口。
+将该 URL 填入 FlClash、Stash 或 Mihomo/OpenClash 客户端的“订阅/配置 URL”即可。还需要在 VPS 防火墙和云厂商安全组中放行脚本显示的订阅 TCP 端口。
 
 ## 📖 使用说明
 
@@ -203,11 +206,11 @@ docker-singbox/
     └── private.key      # TLS 私钥
 ```
 
-### Clash 配置导入
+### Clash/Stash 配置导入
 
 推荐直接使用 URL 订阅：
 
-1. 打开 Clash Verge Rev、FlClash 等 Mihomo/Clash Meta 客户端
+1. 打开 FlClash、Stash、Clash Verge Rev 或 OpenClash 等客户端
 2. 找到“订阅”或“配置”页面
 3. 新增 URL 订阅，粘贴 `config/subscription.url` 中的链接
 4. 更新并启用配置
@@ -219,7 +222,20 @@ docker-singbox/
 3. 选择 `docker-singbox/config/clash.yaml`
 4. 启用配置并选择节点
 
-> 说明：订阅中包含 VLESS Reality、Hysteria2 和 TUIC 节点，需要 Mihomo/Clash Meta 内核；传统 Clash 内核无法完整识别这些协议。
+> 说明：订阅使用通用 `gfw.txt` 域名规则集，并包含 VLESS Reality、Hysteria2 和 TUIC 节点；请使用较新版本的 FlClash、Stash 或 Mihomo/OpenClash，传统 Clash 内核无法完整识别这些协议。
+
+### GFW 黑名单分流
+
+生成的订阅固定使用 `mode: rule`，规则顺序为：
+
+1. 本地域名和私网地址直连
+2. 少量人工直连覆盖规则
+3. 命中 GFW TXT 规则集的域名走 `PROXY`
+4. 其余所有流量由 `MATCH,DIRECT` 直连
+
+GFW 规则来自 `Loyalsoldier/clash-rules` 的 `gfw.txt`。该文件名以 `.txt` 结尾，但内容是通用的 Clash YAML `payload`，所以配置中使用 `format: yaml`。客户端通过 `rule-providers` 每 86400 秒检查一次更新；成功更新时覆盖本地缓存，不会把每天的列表持续追加到内存或磁盘。配置不再加载 `reject.txt`、`direct.txt`、`tld-not-cn.txt`、中国 IP 等大型或与严格黑名单语义不符的规则集。
+
+> 该分流由客户端执行。只有导入完整订阅并保持 `Rule` 模式时才会生效；仅复制单个节点链接，或者手动切换到 `Global` 模式，无法由 VPS 强制执行本地直连。
 
 ### 二维码扫描
 
@@ -333,6 +349,16 @@ brew install qrencode
 4. 客户端是否使用 Mihomo/Clash Meta 内核
 
 脚本部署时完成的是 VPS 本机订阅校验；公网可达性仍取决于防火墙、安全组和上游网络。
+
+### 9. GFW 规则没有更新？
+
+订阅配置和 GFW 规则是两个独立的更新请求。订阅导入成功后，客户端还需要访问：
+
+```text
+https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/gfw.txt
+```
+
+请检查客户端的 Rule Provider 页面或日志中 `gfw` 的更新时间。规则默认每 24 小时检查一次；首次下载失败时，可在网络恢复后手动刷新规则或重新更新订阅。
 
 ## 🔧 故障排查
 

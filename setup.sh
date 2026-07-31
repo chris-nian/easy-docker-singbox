@@ -606,14 +606,6 @@ dns:
   nameserver:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
-  fallback:
-    - https://1.1.1.1/dns-query
-    - https://dns.google/dns-query
-  fallback-filter:
-    geoip: true
-    geoip-code: CN
-    ipcidr:
-      - 240.0.0.0/4
 
 proxies:
   - name: "${vless_name}"
@@ -692,105 +684,31 @@ proxy-groups:
       - "${tuic_name}"
       - "${vmess_name}"
 
-  - name: 🍎Apple
-    type: select
-    proxies:
-      - DIRECT
-      - "${vless_name}"
-      - "${hy2_name}"
-      - "${tuic_name}"
-      - "${vmess_name}"
-
-  - name: "直连"
-    type: select
-    proxies:
-      - DIRECT
-
 rule-providers:
-  reject:
-    type: http
-    behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/reject.txt"
-    path: rule_provider/reject.yaml
-    interval: 86400
-
-  icloud:
-    type: http
-    behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/icloud.txt"
-    path: rule_provider/icloud.yaml
-    interval: 86400
-
-  apple:
-    type: http
-    behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/apple.txt"
-    path: rule_provider/apple.yaml
-    interval: 86400
-
-  direct:
-    type: http
-    behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/direct.txt"
-    path: rule_provider/direct.yaml
-    interval: 86400
-
-  private:
-    type: http
-    behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/private.txt"
-    path: rule_provider/private.yaml
-    interval: 86400
-
   gfw:
     type: http
     behavior: domain
+    # 上游文件名虽为 .txt，内容实际是 Clash YAML payload
+    format: yaml
     url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/gfw.txt"
-    path: rule_provider/gfw.yaml
-    interval: 86400
-
-  tld-not-cn:
-    type: http
-    behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/tld-not-cn.txt"
-    path: rule_provider/tld-not-cn.yaml
-    interval: 86400
-
-  telegramcidr:
-    type: http
-    behavior: ipcidr
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/telegramcidr.txt"
-    path: rule_provider/telegramcidr.yaml
-    interval: 86400
-
-  cncidr:
-    type: http
-    behavior: ipcidr
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/cncidr.txt"
-    path: rule_provider/cncidr.yaml
-    interval: 86400
-
-  lancidr:
-    type: http
-    behavior: ipcidr
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/lancidr.txt"
-    path: rule_provider/lancidr.yaml
-    interval: 86400
-
-  applications:
-    type: http
-    behavior: classical
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/applications.txt"
-    path: rule_provider/applications.yaml
+    path: rule_provider/gfw.txt
     interval: 86400
 
 rules:
-  # 私网 IP 强制直连
+  # 本地域名和私网 IP 强制直连
+  - DOMAIN,localhost,DIRECT
+  - DOMAIN-SUFFIX,local,DIRECT
+  - DOMAIN-SUFFIX,lan,DIRECT
   - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
   - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
   - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+  - IP-CIDR6,::1/128,DIRECT,no-resolve
+  - IP-CIDR6,fc00::/7,DIRECT,no-resolve
+  - IP-CIDR6,fe80::/10,DIRECT,no-resolve
 
-  # 直连
+  # 如有误判，可在 GFW 规则前添加少量人工覆盖规则，例如：
   - DOMAIN-SUFFIX,gpt2share.com,DIRECT
   - DOMAIN-SUFFIX,futunn.com,DIRECT
   - DOMAIN-SUFFIX,moomoo.com,DIRECT
@@ -798,102 +716,15 @@ rules:
   - DOMAIN-SUFFIX,futucdn.com,DIRECT
   - DOMAIN-SUFFIX,moomooapi.com,DIRECT
 
-  # AI / 云服务：强制代理
-  - DOMAIN-SUFFIX,anthropic.com,PROXY
-  - DOMAIN-SUFFIX,claude.ai,PROXY
-  - DOMAIN-SUFFIX,claudeusercontent.com,PROXY
-  - DOMAIN-SUFFIX,anthropic.services,PROXY
-  - DOMAIN-SUFFIX,anthropic.sh,PROXY
-  - DOMAIN-SUFFIX,anthropic.tools,PROXY
-  - DOMAIN-SUFFIX,anthropic.run,PROXY
-  - DOMAIN-SUFFIX,cdn-claude.ai,PROXY
-  - DOMAIN,static.anthropic.com,PROXY
-
-  # OpenAI / ChatGPT
-  - DOMAIN,ws.chatgpt.com,PROXY
-  - DOMAIN,realtime.chatgpt.com,PROXY
-  - DOMAIN-SUFFIX,chatgpt.com,PROXY
-  - DOMAIN-SUFFIX,openai.com,PROXY
-  - DOMAIN-SUFFIX,cdn.openai.com,PROXY
-  - DOMAIN-SUFFIX,oaiusercontent.com,PROXY
-  - DOMAIN-SUFFIX,openaiusercontent.com,PROXY
-
-  # Google / Gemini
-  - DOMAIN-SUFFIX,google.com,PROXY
-  - DOMAIN-SUFFIX,googleapis.com,PROXY
-  - DOMAIN-SUFFIX,gstatic.com,PROXY
-  - DOMAIN-SUFFIX,googleusercontent.com,PROXY
-  - DOMAIN-SUFFIX,ai.google.dev,PROXY
-  - DOMAIN,generativelanguage.googleapis.com,PROXY
-  - DOMAIN,notebooklm.google.com,PROXY
-  - DOMAIN,generativeai.google.com,PROXY
-
-  # Cloudflare / AWS / GitHub
-  - DOMAIN-SUFFIX,cloudflare.com,PROXY
-  - DOMAIN-SUFFIX,workers.dev,PROXY
-  - DOMAIN-SUFFIX,cloudflareinsights.com,PROXY
-  - DOMAIN-SUFFIX,cloudflareclient.com,PROXY
-  - DOMAIN-SUFFIX,cloudflare-dns.com,PROXY
-  - DOMAIN-SUFFIX,amazonaws.com,PROXY
-  - DOMAIN-SUFFIX,s3.amazonaws.com,PROXY
-  - DOMAIN-SUFFIX,cloudfront.net,PROXY
-  - DOMAIN-SUFFIX,github.com,PROXY
-  - DOMAIN-SUFFIX,githubusercontent.com,PROXY
-  - DOMAIN,raw.githubusercontent.com,PROXY
-  - DOMAIN-SUFFIX,jsdelivr.net,PROXY
-
-  # Apple
-  - IP-CIDR,17.0.0.0/8,🍎Apple,no-resolve
-  - DOMAIN-SUFFIX,apple-dns.net,🍎Apple
-  - DOMAIN,appleid.apple.com,🍎Apple
-  - DOMAIN,idmsa.apple.com,🍎Apple
-  - DOMAIN,setup.icloud.com,🍎Apple
-  - DOMAIN,appleid.cdn-apple.com,🍎Apple
-  - DOMAIN,albert.apple.com,🍎Apple
-  - DOMAIN,gs.apple.com,🍎Apple
-  - DOMAIN,ocsp.apple.com,🍎Apple
-  - DOMAIN,push.apple.com,🍎Apple
-  - DOMAIN,apns.apple.com,🍎Apple
-  - DOMAIN-SUFFIX,icloud.com,🍎Apple
-  - DOMAIN-SUFFIX,icloud-content.com,🍎Apple
-  - DOMAIN-SUFFIX,me.com,🍎Apple
-  - DOMAIN,gdmf.apple.com,🍎Apple
-  - DOMAIN,mesu.apple.com,🍎Apple
-  - DOMAIN,mdm.apple.com,🍎Apple
-
-  # 广告拦截
-  - RULE-SET,reject,REJECT
-
-  # Apple / iCloud 规则集
-  - RULE-SET,icloud,🍎Apple
-  - RULE-SET,apple,🍎Apple
-
-  # 国内直连
-  - RULE-SET,direct,DIRECT
-
-  # GFW / 非 CN TLD
+  # 仅 GFW 列表中的域名走代理
   - RULE-SET,gfw,PROXY
-  - RULE-SET,tld-not-cn,PROXY
 
-  # Telegram
-  - RULE-SET,telegramcidr,PROXY
-
-  # 局域网/私有/应用直连
-  - RULE-SET,private,DIRECT
-  - RULE-SET,applications,DIRECT
-  - RULE-SET,lancidr,DIRECT
-  - GEOIP,LAN,DIRECT
-
-  # 中国 IP 直连
-  - RULE-SET,cncidr,DIRECT
-  - GEOIP,CN,DIRECT
-
-  # 最终兜底
-  - MATCH,PROXY
+  # 黑名单模式：未命中 GFW 列表的流量全部直连
+  - MATCH,DIRECT
 EOF
     
     green "Clash 配置已生成: $CONFIG_DIR/clash.yaml"
-    blue "可直接导入 Mihomo/Clash Meta 客户端使用"
+    blue "可直接导入 FlClash、Stash 或 Mihomo/OpenClash 客户端使用"
 }
 
 # 发布并验证 Clash URL 订阅
@@ -925,7 +756,8 @@ publish_clash_subscription() {
         echo "========== Clash URL 订阅 =========="
         echo "$subscription_url"
         echo "订阅端口(TCP): $subscription_port"
-        echo "适用客户端: Mihomo/Clash Meta 内核（如 Clash Verge Rev、FlClash）"
+        echo "适用客户端: FlClash、Stash、Mihomo/OpenClash"
+        echo "分流模式: GFW TXT 黑名单（命中代理，其余直连）"
     } >> "$CONFIG_DIR/client_links.txt"
 
     if curl -fsS --max-time 5 "$local_subscription_url" | cmp -s - "$CONFIG_DIR/clash.yaml"; then
