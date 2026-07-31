@@ -2,7 +2,7 @@
 
 # Sing-box Docker 一键部署向导
 # 支持协议: Vless-reality, Vmess-ws, Hysteria2, Tuic-v5
-# 支持功能: 安装、卸载、启动、停止、重启、查看状态
+# 支持功能: 安装、卸载、启动、停止、重启、查看状态、Clash URL 订阅
 
 # 移除 set -e，改用手动错误处理
 
@@ -25,8 +25,20 @@ check_root() {
 WORK_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_DIR="$WORK_DIR/config"
 CERTS_DIR="$WORK_DIR/certs"
+SUBSCRIPTION_DIR="$WORK_DIR/subscription"
 
-mkdir -p "$CONFIG_DIR" "$CERTS_DIR"
+mkdir -p "$CONFIG_DIR" "$CERTS_DIR" "$SUBSCRIPTION_DIR"
+
+# 兼容 Docker Compose 插件与旧版 docker-compose
+compose() {
+    if docker compose version &> /dev/null; then
+        docker compose "$@"
+    elif command -v docker-compose &> /dev/null; then
+        docker-compose "$@"
+    else
+        return 1
+    fi
+}
 
 # 检测系统架构
 check_arch() {
@@ -91,7 +103,9 @@ random_port() {
     local port
     while true; do
         port=$(shuf -i 10000-65535 -n 1)
-        if ! ss -tunlp | grep -q ":$port "; then
+        if ! ss -tunlp | grep -q ":$port " && \
+           [[ "$port" != "${port_vless:-}" && "$port" != "${port_vmess:-}" && \
+              "$port" != "${port_hy2:-}" && "$port" != "${port_tuic:-}" ]]; then
             echo $port
             return
         fi
@@ -117,6 +131,27 @@ setup_ports() {
     read -p "$(yellow 'Tuic-v5端口 (回车随机): ')" port_tuic
     [[ -z $port_tuic ]] && port_tuic=$(random_port)
     blue "Tuic-v5端口: $port_tuic"
+
+    read -p "$(yellow 'Clash订阅端口/TCP (回车随机): ')" subscription_port
+    [[ -z $subscription_port ]] && subscription_port=$(random_port)
+    blue "Clash订阅端口: $subscription_port"
+
+    local ports=("$port_vless" "$port_vmess" "$port_hy2" "$port_tuic" "$subscription_port")
+    local i j
+    for i in "${!ports[@]}"; do
+        if [[ ! "${ports[$i]}" =~ ^[0-9]+$ ]] || (( ports[$i] < 1 || ports[$i] > 65535 )); then
+            red "端口必须是 1-65535 之间的整数，请重新配置"
+            setup_ports
+            return
+        fi
+        for ((j = i + 1; j < ${#ports[@]}; j++)); do
+            if [[ "${ports[$i]}" == "${ports[$j]}" ]]; then
+                red "所有代理端口和订阅端口必须互不重复，请重新配置"
+                setup_ports
+                return
+            fi
+        done
+    done
 }
 
 # 生成密钥
@@ -150,6 +185,10 @@ generate_keys() {
     # Short ID
     short_id=$(openssl rand -hex 8)
     blue "Short ID: $short_id"
+
+    # Clash 订阅令牌（URL 中的不可猜测随机路径）
+    subscription_token=$(openssl rand -hex 24)
+    subscription_url="http://${server_ip_bracket}:${subscription_port}/${subscription_token}.yaml"
     
     # 保存公钥供客户端使用
     echo "$public_key" > "$CONFIG_DIR/public.key"
@@ -205,9 +244,7 @@ setup_reality_sni() {
 generate_docker_compose() {
     green "==================== 生成 docker-compose.yml ===================="
     
-    cat > "$WORK_DIR/docker-compose.yml" <<'EOF'
-version: "3.8"
-
+    cat > "$WORK_DIR/docker-compose.yml" <<EOF
 services:
   sing-box:
     image: ghcr.io/sagernet/sing-box:latest
@@ -221,6 +258,22 @@ services:
       - ./config:/etc/sing-box
       - ./certs:/etc/certs
     command: ["run", "-c", "/etc/sing-box/config.json"]
+
+  clash-subscription:
+    image: busybox:1.38.0
+    container_name: sing-box-subscription
+    restart: always
+    user: "65534:65534"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "${subscription_port}:${subscription_port}/tcp"
+    volumes:
+      - ./subscription:/www:ro
+    command: ["httpd", "-f", "-p", "${subscription_port}", "-h", "/www"]
 EOF
     
     blue "docker-compose.yml 已生成: $WORK_DIR/docker-compose.yml"
@@ -355,13 +408,11 @@ start_container() {
     cd "$WORK_DIR"
     
     # 停止旧容器
-    docker compose down 2>/dev/null || docker-compose down 2>/dev/null || true
+    compose down 2>/dev/null || true
     
     # 启动新容器
-    if docker compose up -d 2>/dev/null; then
-        green "容器启动成功 (docker compose)"
-    elif docker-compose up -d 2>/dev/null; then
-        green "容器启动成功 (docker-compose)"
+    if compose up -d; then
+        green "容器启动成功"
     else
         red "容器启动失败"
         exit 1
@@ -370,10 +421,17 @@ start_container() {
     sleep 2
     
     # 检查状态
-    if docker ps | grep -q sing-box; then
+    if [[ "$(docker inspect -f '{{.State.Running}}' sing-box 2>/dev/null)" == "true" ]]; then
         green "Sing-box 运行中"
     else
         red "Sing-box 启动失败，请检查日志: docker logs sing-box"
+        exit 1
+    fi
+
+    if [[ "$(docker inspect -f '{{.State.Running}}' sing-box-subscription 2>/dev/null)" == "true" ]]; then
+        green "Clash 订阅服务运行中"
+    else
+        red "Clash 订阅服务启动失败，请检查日志: docker logs sing-box-subscription"
         exit 1
     fi
 }
@@ -412,7 +470,7 @@ generate_client_config() {
     echo ""
     
     # Vless Reality
-    vless_link="vless://${uuid}@${server_ip}:${port_vless}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${reality_sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp#Vless-Reality"
+    vless_link="vless://${uuid}@${server_ip_bracket}:${port_vless}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${reality_sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp#Vless-Reality"
     blue "========== Vless-Reality =========="
     echo "$vless_link"
     echo ""
@@ -446,7 +504,7 @@ EOF
     echo ""
     
     # Hysteria2
-    hy2_link="hysteria2://${uuid}@${server_ip}:${port_hy2}?insecure=1&sni=${tls_domain}#Hysteria2"
+    hy2_link="hysteria2://${uuid}@${server_ip_bracket}:${port_hy2}?insecure=1&sni=${tls_domain}#Hysteria2"
     blue "========== Hysteria2 =========="
     echo "$hy2_link"
     echo ""
@@ -454,7 +512,7 @@ EOF
     echo ""
     
     # Tuic
-    tuic_link="tuic://${uuid}:${uuid}@${server_ip}:${port_tuic}?congestion_control=bbr&alpn=h3&sni=${tls_domain}&udp_relay_mode=native&allow_insecure=1#Tuic-V5"
+    tuic_link="tuic://${uuid}:${uuid}@${server_ip_bracket}:${port_tuic}?congestion_control=bbr&alpn=h3&sni=${tls_domain}&udp_relay_mode=native&allow_insecure=1#Tuic-V5"
     blue "========== Tuic-V5 =========="
     echo "$tuic_link"
     echo ""
@@ -515,6 +573,7 @@ EOF
     
     # 生成 Clash 配置文件
     generate_clash_config
+    publish_clash_subscription
 }
 
 # 生成 Clash 配置文件
@@ -559,7 +618,7 @@ dns:
 proxies:
   - name: "${vless_name}"
     type: vless
-    server: ${server_ip}
+    server: "${server_ip}"
     port: ${port_vless}
     uuid: "${uuid}"
     flow: "xtls-rprx-vision"
@@ -574,12 +633,14 @@ proxies:
 
   - name: "${vmess_name}"
     type: vmess
-    server: ${server_ip}
+    server: "${server_ip}"
     port: ${port_vmess}
     uuid: "${uuid}"
     alterId: 0
     cipher: auto
     udp: true
+    tls: ${tls_enabled}
+    servername: "${tls_domain}"
     network: ws
     ws-opts:
       path: "/${uuid}-vm"
@@ -588,7 +649,7 @@ proxies:
 
   - name: "${hy2_name}"
     type: hysteria2
-    server: ${server_ip}
+    server: "${server_ip}"
     port: ${port_hy2}
     password: "${uuid}"
     sni: "${tls_domain}"
@@ -599,7 +660,7 @@ proxies:
 
   - name: "${tuic_name}"
     type: tuic
-    server: ${server_ip}
+    server: "${server_ip}"
     port: ${port_tuic}
     uuid: "${uuid}"
     password: "${uuid}"
@@ -832,7 +893,53 @@ rules:
 EOF
     
     green "Clash 配置已生成: $CONFIG_DIR/clash.yaml"
-    blue "可直接导入 Clash Verge 使用"
+    blue "可直接导入 Mihomo/Clash Meta 客户端使用"
+}
+
+# 发布并验证 Clash URL 订阅
+publish_clash_subscription() {
+    local old_token=""
+    local subscription_file="$SUBSCRIPTION_DIR/${subscription_token}.yaml"
+    local local_subscription_url="http://127.0.0.1:${subscription_port}/${subscription_token}.yaml"
+
+    # 重新部署时只撤销上一次由本脚本生成的订阅 URL
+    if [[ -f "$CONFIG_DIR/subscription.token" ]]; then
+        old_token=$(tr -d '\r\n' < "$CONFIG_DIR/subscription.token")
+        if [[ "$old_token" =~ ^[0-9a-f]{48}$ && "$old_token" != "$subscription_token" ]]; then
+            rm -f "$SUBSCRIPTION_DIR/${old_token}.yaml"
+        fi
+    fi
+
+    mkdir -p "$SUBSCRIPTION_DIR"
+    chmod 755 "$SUBSCRIPTION_DIR"
+    printf '%s\n' 'Clash subscription endpoint' > "$SUBSCRIPTION_DIR/index.html"
+    chmod 644 "$SUBSCRIPTION_DIR/index.html"
+    cp "$CONFIG_DIR/clash.yaml" "$subscription_file"
+    chmod 644 "$subscription_file"
+    printf '%s\n' "$subscription_token" > "$CONFIG_DIR/subscription.token"
+    printf '%s\n' "$subscription_url" > "$CONFIG_DIR/subscription.url"
+    chmod 600 "$CONFIG_DIR/subscription.token" "$CONFIG_DIR/subscription.url" "$CONFIG_DIR/client_links.txt"
+
+    {
+        echo ""
+        echo "========== Clash URL 订阅 =========="
+        echo "$subscription_url"
+        echo "订阅端口(TCP): $subscription_port"
+        echo "适用客户端: Mihomo/Clash Meta 内核（如 Clash Verge Rev、FlClash）"
+    } >> "$CONFIG_DIR/client_links.txt"
+
+    if curl -fsS --max-time 5 "$local_subscription_url" | cmp -s - "$CONFIG_DIR/clash.yaml"; then
+        green "Clash 订阅本机校验成功"
+    else
+        red "Clash 订阅本机校验失败，请检查日志: docker logs sing-box-subscription"
+        exit 1
+    fi
+
+    echo ""
+    blue "========== Clash URL 订阅 =========="
+    echo "$subscription_url"
+    yellow "请在 VPS 防火墙/安全组放行 TCP 端口: $subscription_port"
+    yellow "订阅 URL 含节点凭据，请勿公开分享"
 }
 
 # 显示主菜单
@@ -844,9 +951,12 @@ show_main_menu() {
     echo ""
     
     # 检查安装状态
-    if command -v docker &> /dev/null && docker ps -a 2>/dev/null | grep -q sing-box; then
-        if docker ps 2>/dev/null | grep -q sing-box; then
-            green "当前状态: ✓ 运行中"
+    if command -v docker &> /dev/null && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 'sing-box'; then
+        if [[ "$(docker inspect -f '{{.State.Running}}' sing-box 2>/dev/null)" == "true" && \
+              "$(docker inspect -f '{{.State.Running}}' sing-box-subscription 2>/dev/null)" == "true" ]]; then
+            green "当前状态: ✓ 代理与订阅运行中"
+        elif [[ "$(docker inspect -f '{{.State.Running}}' sing-box 2>/dev/null)" == "true" ]]; then
+            yellow "当前状态: ⚠ 代理运行中，订阅服务异常"
         else
             yellow "当前状态: ● 已停止"
         fi
@@ -928,6 +1038,9 @@ show_client_config() {
         cat "$CONFIG_DIR/client_links.txt"
         echo ""
         green "Clash配置文件: $CONFIG_DIR/clash.yaml"
+        if [[ -f "$CONFIG_DIR/subscription.url" ]]; then
+            green "Clash订阅链接: $(cat "$CONFIG_DIR/subscription.url")"
+        fi
     else
         red "未找到客户端配置文件,请先安装部署"
     fi
@@ -961,12 +1074,12 @@ uninstall() {
     
     echo ""
     green "1. 停止并删除容器..."
-    docker stop sing-box 2>/dev/null && green "   容器已停止" || yellow "   容器未运行"
-    docker rm sing-box 2>/dev/null && green "   容器已删除" || yellow "   容器不存在"
+    compose down 2>/dev/null && green "   代理与订阅容器已删除" || yellow "   容器不存在"
     
     echo ""
     green "2. 删除 Docker 镜像..."
     docker rmi ghcr.io/sagernet/sing-box:latest 2>/dev/null && green "   镜像已删除" || yellow "   镜像不存在"
+    docker rmi busybox:1.38.0 2>/dev/null && green "   订阅服务镜像已删除" || yellow "   订阅服务镜像不存在或正在使用"
     
     echo ""
     green "3. 清理配置文件..."
@@ -979,6 +1092,11 @@ uninstall() {
     if [[ -d "$CERTS_DIR" ]]; then
         rm -rf "$CERTS_DIR"
         green "   已删除: $CERTS_DIR"
+    fi
+
+    if [[ -d "$SUBSCRIPTION_DIR" ]]; then
+        rm -rf "$SUBSCRIPTION_DIR"
+        green "   已删除: $SUBSCRIPTION_DIR"
     fi
     
     if [[ -f "$WORK_DIR/docker-compose.yml" ]]; then
@@ -1002,13 +1120,18 @@ uninstall() {
 start_service() {
     clear
     echo ""
-    if docker ps -a | grep -q sing-box; then
-        docker start sing-box
-        green "✓ Sing-box 已启动"
+    if [[ -f "$WORK_DIR/docker-compose.yml" ]]; then
+        cd "$WORK_DIR" || return
+        if compose up -d; then
+            green "✓ Sing-box 与 Clash 订阅服务已启动"
+        else
+            red "✗ 服务启动失败"
+            return
+        fi
         echo ""
-        docker ps | grep sing-box
+        docker ps --filter 'name=sing-box'
     else
-        red "✗ Sing-box 容器不存在,请先安装部署"
+        red "✗ docker-compose.yml 不存在,请先安装部署"
     fi
     echo ""
 }
@@ -1017,11 +1140,12 @@ start_service() {
 stop_service() {
     clear
     echo ""
-    if docker ps | grep -q sing-box; then
-        docker stop sing-box
-        green "✓ Sing-box 已停止"
+    if [[ -f "$WORK_DIR/docker-compose.yml" ]]; then
+        cd "$WORK_DIR" || return
+        compose stop
+        green "✓ Sing-box 与 Clash 订阅服务已停止"
     else
-        yellow "⚠ Sing-box 未运行"
+        yellow "⚠ 服务未安装"
     fi
     echo ""
 }
@@ -1030,13 +1154,18 @@ stop_service() {
 restart_service() {
     clear
     echo ""
-    if docker ps -a | grep -q sing-box; then
-        docker restart sing-box
-        green "✓ Sing-box 已重启"
+    if [[ -f "$WORK_DIR/docker-compose.yml" ]]; then
+        cd "$WORK_DIR" || return
+        if compose restart; then
+            green "✓ Sing-box 与 Clash 订阅服务已重启"
+        else
+            red "✗ 服务重启失败"
+            return
+        fi
         echo ""
-        docker ps | grep sing-box
+        docker ps --filter 'name=sing-box'
     else
-        red "✗ Sing-box 容器不存在,请先安装部署"
+        red "✗ 服务不存在,请先安装部署"
     fi
     echo ""
 }
@@ -1055,19 +1184,32 @@ show_status() {
     fi
     
     green "==================== Sing-box 状态 ===================="
-    if docker ps 2>/dev/null | grep -q sing-box; then
+    if [[ "$(docker inspect -f '{{.State.Running}}' sing-box 2>/dev/null)" == "true" ]]; then
         green "✓ Sing-box 运行中"
         echo ""
-        docker ps | grep sing-box
+        docker ps --filter 'name=sing-box'
         echo ""
         green "最近日志:"
         docker logs --tail 20 sing-box 2>/dev/null || yellow "无法获取日志"
-    elif docker ps -a 2>/dev/null | grep -q sing-box; then
+    elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 'sing-box'; then
         yellow "⚠ Sing-box 已停止"
         echo ""
         docker ps -a | grep sing-box
     else
         red "✗ Sing-box 未安装"
+    fi
+
+    echo ""
+    green "==================== Clash 订阅状态 ===================="
+    if [[ "$(docker inspect -f '{{.State.Running}}' sing-box-subscription 2>/dev/null)" == "true" ]]; then
+        green "✓ Clash 订阅服务运行中"
+        if [[ -f "$CONFIG_DIR/subscription.url" ]]; then
+            echo "订阅链接: $(cat "$CONFIG_DIR/subscription.url")"
+        fi
+    elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 'sing-box-subscription'; then
+        yellow "⚠ Clash 订阅服务已停止"
+    else
+        red "✗ Clash 订阅服务未安装"
     fi
     echo ""
 }
@@ -1128,6 +1270,8 @@ install_singbox() {
     echo ""
     yellow "客户端链接: $CONFIG_DIR/client_links.txt"
     yellow "Clash配置:  $CONFIG_DIR/clash.yaml"
+    yellow "Clash订阅:  $subscription_url"
+    yellow "放行端口:   TCP/$subscription_port"
     echo ""
     
     pause_and_return

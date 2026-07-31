@@ -19,6 +19,8 @@
 - 📱 **交互式菜单** - 友好的命令行界面，支持安装、启动、停止、重启、查看状态、卸载等操作
 - 🔐 **多协议支持** - 同时配置 4 种主流代理协议
 - 🎯 **自动生成配置** - 自动生成客户端连接链接、二维码和 Clash 配置文件
+- 🔗 **Clash URL 订阅** - 部署后直接生成带随机令牌的订阅链接，可粘贴到客户端自动更新
+- 🪶 **轻量发布** - 使用约 1–5 MB 的 BusyBox 官方镜像静态发布订阅，无数据库、面板或转换服务
 - 🌐 **双栈支持** - 自动检测 IPv4/IPv6，支持用户选择
 - 🔑 **密钥管理** - 自动生成 UUID、Reality 密钥对、Short ID 等
 - 📦 **Docker 容器化** - 隔离环境，易于管理和迁移
@@ -46,7 +48,7 @@
 
 - **通用客户端**: 支持上述协议的任意客户端
 - **推荐客户端**: 
-  - Clash Verge (可直接导入生成的 clash.yaml)
+  - Mihomo/Clash Meta 内核客户端（如 Clash Verge Rev、FlClash）
   - Shadowrocket (支持二维码扫描)
   - v2rayN/v2rayNG
   - Surge
@@ -86,6 +88,7 @@ sudo bash setup.sh
 5. **生成密钥** - 自动生成 UUID、Reality 密钥对、Short ID
 6. **证书配置** - 选择自签证书或自定义证书
 7. **Reality SNI 配置** - 设置 Reality 伪装域名（默认 apple.com）
+8. **发布并验证订阅** - 启动轻量静态服务，并从 VPS 本机拉取订阅进行一致性校验
 
 ### 4. 获取客户端配置
 
@@ -95,9 +98,19 @@ sudo bash setup.sh
 docker-singbox/config/
 ├── client_links.txt    # 客户端连接链接和二维码
 ├── clash.yaml          # Clash 配置文件
+├── subscription.url    # Clash 订阅链接
+├── subscription.token  # 订阅随机令牌（请保密）
 ├── config.json         # Sing-box 服务端配置
 └── public.key          # Reality 公钥
 ```
+
+部署完成后，终端会显示类似下面的链接：
+
+```text
+http://203.0.113.10:12345/随机令牌.yaml
+```
+
+将该 URL 填入 Mihomo/Clash Meta 客户端的“订阅/配置 URL”即可。还需要在 VPS 防火墙和云厂商安全组中放行脚本显示的订阅 TCP 端口。
 
 ## 📖 使用说明
 
@@ -115,9 +128,9 @@ docker-singbox/config/
 请选择操作:
 
   1. 安装部署 Sing-box
-  2. 启动服务
-  3. 停止服务
-  4. 重启服务
+  2. 启动服务（代理 + 订阅）
+  3. 停止服务（代理 + 订阅）
+  4. 重启服务（代理 + 订阅）
   5. 查看状态
   6. 查看客户端配置
   7. 卸载服务
@@ -142,7 +155,7 @@ sudo bash setup.sh
 # 选择对应的菜单项
 ```
 
-#### 查看客户端配置
+#### 查看客户端配置和订阅 URL
 
 ```bash
 sudo bash setup.sh
@@ -150,6 +163,9 @@ sudo bash setup.sh
 
 # 或直接查看文件
 cat docker-singbox/config/client_links.txt
+
+# 只查看 Clash 订阅 URL
+cat docker-singbox/config/subscription.url
 ```
 
 #### 卸载服务
@@ -177,7 +193,11 @@ docker-singbox/
 │   ├── config.json      # Sing-box 服务端配置
 │   ├── client_links.txt # 客户端连接信息
 │   ├── clash.yaml       # Clash 客户端配置
+│   ├── subscription.url # Clash 订阅链接
+│   ├── subscription.token # 订阅随机令牌
 │   └── public.key       # Reality 公钥
+├── subscription/        # BusyBox 只读发布目录
+│   └── <随机令牌>.yaml  # URL 实际返回的订阅配置
 └── certs/               # 证书目录
     ├── cert.pem         # TLS 证书
     └── private.key      # TLS 私钥
@@ -185,12 +205,21 @@ docker-singbox/
 
 ### Clash 配置导入
 
-生成的 `clash.yaml` 可直接导入 Clash Verge 使用：
+推荐直接使用 URL 订阅：
 
-1. 打开 Clash Verge
-2. 点击 "配置" → "导入"
+1. 打开 Clash Verge Rev、FlClash 等 Mihomo/Clash Meta 客户端
+2. 找到“订阅”或“配置”页面
+3. 新增 URL 订阅，粘贴 `config/subscription.url` 中的链接
+4. 更新并启用配置
+
+也可以离线导入生成的 `clash.yaml`：
+
+1. 打开客户端的“配置”页面
+2. 选择从本地文件导入
 3. 选择 `docker-singbox/config/clash.yaml`
 4. 启用配置并选择节点
+
+> 说明：订阅中包含 VLESS Reality、Hysteria2 和 TUIC 节点，需要 Mihomo/Clash Meta 内核；传统 Clash 内核无法完整识别这些协议。
 
 ### 二维码扫描
 
@@ -231,6 +260,8 @@ sudo systemctl start docker
    # 开放端口（以 Ubuntu 为例）
    sudo ufw allow <端口号>
    ```
+
+   订阅端口只使用 TCP；Hysteria2 和 TUIC 节点端口使用 UDP。若 VPS 还有云厂商安全组，也需要同步放行。
 
 2. **服务状态** - 确认服务正在运行
    ```bash
@@ -292,6 +323,17 @@ brew install qrencode
 
 或者直接复制 `client_links.txt` 中的连接链接到客户端。
 
+### 8. Clash 订阅无法更新？
+
+依次检查：
+
+1. 菜单“查看状态”中 `Clash 订阅服务` 是否运行
+2. `docker logs sing-box-subscription` 是否有报错
+3. VPS 防火墙和云安全组是否已放行订阅 TCP 端口
+4. 客户端是否使用 Mihomo/Clash Meta 内核
+
+脚本部署时完成的是 VPS 本机订阅校验；公网可达性仍取决于防火墙、安全组和上游网络。
+
 ## 🔧 故障排查
 
 ### 查看容器状态
@@ -304,6 +346,9 @@ docker ps -a | grep sing-box
 
 ```bash
 docker logs -f sing-box
+
+# 订阅服务日志
+docker logs -f sing-box-subscription
 ```
 
 ### 查看最近日志
@@ -315,7 +360,7 @@ docker logs --tail 50 sing-box
 ### 重启容器
 
 ```bash
-docker restart sing-box
+docker compose restart
 ```
 
 ### 手动启动容器
@@ -388,6 +433,10 @@ Reality SNI 是伪装的目标域名，建议选择：
 3. **防火墙配置** - 只开放必要的端口
 
 4. **日志监控** - 定期查看日志，发现异常流量
+
+5. **保护订阅 URL** - URL 中的随机令牌等同于访问凭据，不要发布到群聊、论坛或公开仓库；重新部署会生成新令牌并撤销上一次由脚本生成的订阅路径
+
+6. **按需升级 HTTPS** - 默认订阅为最简单、低资源占用的 HTTP 静态服务。HTTP 不防窃听；如网络环境不可信，请在已有域名和有效证书的前提下，通过 Caddy/Nginx 反向代理订阅端口并使用 HTTPS
 
 ## 📞 支持
 
