@@ -154,6 +154,28 @@ setup_ports() {
     done
 }
 
+# 校验 Clash 订阅令牌格式
+is_valid_subscription_token() {
+    [[ "$1" =~ ^([0-9a-f]{48}|[0-9a-f]{64})$ ]]
+}
+
+# 配置 Clash 订阅令牌
+setup_subscription_token() {
+    local existing_token=""
+
+    if [[ -f "$CONFIG_DIR/subscription.token" ]]; then
+        existing_token=$(tr -d '\r\n' < "$CONFIG_DIR/subscription.token")
+    fi
+
+    if is_valid_subscription_token "$existing_token"; then
+        subscription_token="$existing_token"
+        blue "复用现有 Clash 订阅令牌，订阅 URL 保持不变"
+    else
+        subscription_token=$(openssl rand -hex 24)
+        blue "首次部署或订阅令牌无效，已生成新的 Clash 订阅令牌"
+    fi
+}
+
 # 生成密钥
 generate_keys() {
     green "==================== 生成密钥 ===================="
@@ -186,8 +208,8 @@ generate_keys() {
     short_id=$(openssl rand -hex 8)
     blue "Short ID: $short_id"
 
-    # Clash 订阅令牌（URL 中的不可猜测随机路径）
-    subscription_token=$(openssl rand -hex 24)
+    # Clash 订阅令牌：首次生成，后续重部署复用
+    setup_subscription_token
     subscription_url="http://${server_ip_bracket}:${subscription_port}/${subscription_token}.yaml"
     
     # 保存公钥供客户端使用
@@ -776,7 +798,7 @@ publish_clash_subscription() {
     # 重新部署时只撤销上一次由本脚本生成的订阅 URL
     if [[ -f "$CONFIG_DIR/subscription.token" ]]; then
         old_token=$(tr -d '\r\n' < "$CONFIG_DIR/subscription.token")
-        if [[ "$old_token" =~ ^[0-9a-f]{48}$ && "$old_token" != "$subscription_token" ]]; then
+        if is_valid_subscription_token "$old_token" && [[ "$old_token" != "$subscription_token" ]]; then
             rm -f "$SUBSCRIPTION_DIR/${old_token}.yaml"
         fi
     fi

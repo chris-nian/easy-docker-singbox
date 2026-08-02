@@ -19,7 +19,7 @@
 - 📱 **交互式菜单** - 友好的命令行界面，支持安装、启动、停止、重启、查看状态、卸载等操作
 - 🔐 **多协议支持** - 同时配置 4 种主流代理协议
 - 🎯 **自动生成配置** - 自动生成客户端连接链接、二维码和 Clash 配置文件
-- 🔗 **Clash URL 订阅** - 部署后直接生成带随机令牌的订阅链接，可粘贴到客户端自动更新
+- 🔗 **Clash URL 订阅** - 首次部署生成随机令牌，后续重部署复用同一 URL，客户端可持续刷新
 - 🚦 **精简大陆白名单** - 私网和中国大陆流量直连，其余流量默认走代理
 - 🔄 **轻量规则更新** - 使用 MetaCubeX MRS 规则集每天覆盖更新，不累积历史列表
 - 👃 **原生域名嗅探** - 启用 Mihomo HTTP、TLS、QUIC 嗅探，兼容 DoH 和真实 IP 连接
@@ -103,7 +103,7 @@ docker-singbox/config/
 ├── client_links.txt    # 客户端连接链接和二维码
 ├── clash.yaml          # Clash 配置文件
 ├── subscription.url    # Clash 订阅链接
-├── subscription.token  # 订阅随机令牌（请保密）
+├── subscription.token  # 持久化订阅令牌（首次生成，请保密）
 ├── config.json         # Sing-box 服务端配置
 └── public.key          # Reality 公钥
 ```
@@ -115,6 +115,12 @@ http://203.0.113.10:12345/随机令牌.yaml
 ```
 
 将该 URL 填入 FlClash、Stash 或 Mihomo/OpenClash 客户端的“订阅/配置 URL”即可。还需要在 VPS 防火墙和云厂商安全组中放行脚本显示的订阅 TCP 端口。
+
+### 订阅 URL 的持久化
+
+脚本首次部署时会在 `config/subscription.token` 中生成一个随机令牌。之后再次选择“安装部署 Sing-box”时，只要该文件仍存在且内容有效，脚本会复用原令牌；新的 `clash.yaml` 会覆盖到同一个订阅路径，客户端只需要刷新原 URL 即可获取最新内容。
+
+订阅 URL 仍会在以下情况变化：服务器公网 IP 变化、订阅端口变化、`config/subscription.token` 被删除或内容无效，或者执行卸载后重新安装。若需要主动轮换订阅凭据，请先备份配置，再删除该令牌文件并重新部署。
 
 ## 📖 使用说明
 
@@ -201,7 +207,7 @@ docker-singbox/
 │   ├── subscription.token # 订阅随机令牌
 │   └── public.key       # Reality 公钥
 ├── subscription/        # BusyBox 只读发布目录
-│   └── <随机令牌>.yaml  # URL 实际返回的订阅配置
+│   └── <订阅令牌>.yaml  # URL 实际返回的订阅配置
 └── certs/               # 证书目录
     ├── cert.pem         # TLS 证书
     └── private.key      # TLS 私钥
@@ -476,7 +482,7 @@ Reality SNI 是伪装的目标域名，建议选择：
 
 4. **日志监控** - 定期查看日志，发现异常流量
 
-5. **保护订阅 URL** - URL 中的随机令牌等同于访问凭据，不要发布到群聊、论坛或公开仓库；重新部署会生成新令牌并撤销上一次由脚本生成的订阅路径
+5. **保护订阅 URL** - URL 中的随机令牌等同于访问凭据，不要发布到群聊、论坛或公开仓库；正常重部署会复用令牌，只有令牌失效、地址变化或卸载重装时 URL 才会变化
 
 6. **按需升级 HTTPS** - 默认订阅为最简单、低资源占用的 HTTP 静态服务。HTTP 不防窃听；如网络环境不可信，请在已有域名和有效证书的前提下，通过 Caddy/Nginx 反向代理订阅端口并使用 HTTPS
 
