@@ -391,7 +391,7 @@ generate_config() {
   "route": {
     "rules": [
       {
-        "protocol": ["quic", "stun"],
+        "protocol": ["stun"],
         "outbound": "block"
       }
     ],
@@ -607,6 +607,20 @@ dns:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
 
+sniffer:
+  enable: true
+  force-dns-mapping: true
+  parse-pure-ip: true
+  override-destination: false
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+      override-destination: true
+    TLS:
+      ports: [443, 8443]
+    QUIC:
+      ports: [443, 8443]
+
 proxies:
   - name: "${vless_name}"
     type: vless
@@ -685,30 +699,51 @@ proxy-groups:
       - "${vmess_name}"
 
 rule-providers:
-  gfw:
+  private_domain:
     type: http
     behavior: domain
-    # 上游文件名虽为 .txt，内容实际是 Clash YAML payload
-    format: yaml
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/gfw.txt"
-    path: rule_provider/gfw.txt
+    format: mrs
+    url: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/private.mrs"
+    path: rule_provider/private_domain.mrs
+    interval: 86400
+
+  gfw_domain:
+    type: http
+    behavior: domain
+    format: mrs
+    url: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/gfw.mrs"
+    path: rule_provider/gfw_domain.mrs
+    interval: 86400
+
+  cn_domain:
+    type: http
+    behavior: domain
+    format: mrs
+    url: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/cn.mrs"
+    path: rule_provider/cn_domain.mrs
+    interval: 86400
+
+  private_ip:
+    type: http
+    behavior: ipcidr
+    format: mrs
+    url: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geoip/private.mrs"
+    path: rule_provider/private_ip.mrs
+    interval: 86400
+
+  cn_ip:
+    type: http
+    behavior: ipcidr
+    format: mrs
+    url: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geoip/cn.mrs"
+    path: rule_provider/cn_ip.mrs
     interval: 86400
 
 rules:
-  # 本地域名和私网 IP 强制直连
-  - DOMAIN,localhost,DIRECT
-  - DOMAIN-SUFFIX,local,DIRECT
-  - DOMAIN-SUFFIX,lan,DIRECT
-  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
-  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
-  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
-  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
-  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
-  - IP-CIDR6,::1/128,DIRECT,no-resolve
-  - IP-CIDR6,fc00::/7,DIRECT,no-resolve
-  - IP-CIDR6,fe80::/10,DIRECT,no-resolve
+  # 局域网和私有域名优先直连
+  - RULE-SET,private_domain,DIRECT
 
-  # 如有误判，可在 GFW 规则前添加少量人工覆盖规则，例如：
+  # 少量人工直连覆盖，优先级高于公共规则集
   - DOMAIN-SUFFIX,gpt2share.com,DIRECT
   - DOMAIN-SUFFIX,futunn.com,DIRECT
   - DOMAIN-SUFFIX,moomoo.com,DIRECT
@@ -716,11 +751,16 @@ rules:
   - DOMAIN-SUFFIX,futucdn.com,DIRECT
   - DOMAIN-SUFFIX,moomooapi.com,DIRECT
 
-  # 仅 GFW 列表中的域名走代理
-  - RULE-SET,gfw,PROXY
+  # 已知受限域名优先代理，避免与 CN 域名集冲突
+  - RULE-SET,gfw_domain,PROXY
 
-  # 黑名单模式：未命中 GFW 列表的流量全部直连
-  - MATCH,DIRECT
+  # 中国大陆域名与网络直连
+  - RULE-SET,cn_domain,DIRECT
+  - RULE-SET,private_ip,DIRECT,no-resolve
+  - RULE-SET,cn_ip,DIRECT
+
+  # 大陆白名单模式：无法确定为大陆流量时默认代理
+  - MATCH,PROXY
 EOF
     
     green "Clash 配置已生成: $CONFIG_DIR/clash.yaml"
@@ -757,7 +797,7 @@ publish_clash_subscription() {
         echo "$subscription_url"
         echo "订阅端口(TCP): $subscription_port"
         echo "适用客户端: FlClash、Stash、Mihomo/OpenClash"
-        echo "分流模式: GFW TXT 黑名单（命中代理，其余直连）"
+        echo "分流模式: 精简大陆白名单（大陆直连，其余代理）"
     } >> "$CONFIG_DIR/client_links.txt"
 
     if curl -fsS --max-time 5 "$local_subscription_url" | cmp -s - "$CONFIG_DIR/clash.yaml"; then

@@ -20,8 +20,9 @@
 - 🔐 **多协议支持** - 同时配置 4 种主流代理协议
 - 🎯 **自动生成配置** - 自动生成客户端连接链接、二维码和 Clash 配置文件
 - 🔗 **Clash URL 订阅** - 部署后直接生成带随机令牌的订阅链接，可粘贴到客户端自动更新
-- 🚦 **GFW 黑名单分流** - 仅 `gfw.txt` 规则命中的域名走代理，其他流量默认直连
-- 🔄 **规则自动更新** - 客户端每天从公共规则源覆盖更新，不在订阅中内嵌或累积大型列表
+- 🚦 **精简大陆白名单** - 私网和中国大陆流量直连，其余流量默认走代理
+- 🔄 **轻量规则更新** - 使用 MetaCubeX MRS 规则集每天覆盖更新，不累积历史列表
+- 👃 **原生域名嗅探** - 启用 Mihomo HTTP、TLS、QUIC 嗅探，兼容 DoH 和真实 IP 连接
 - 🪶 **轻量发布** - 使用约 1–5 MB 的 BusyBox 官方镜像静态发布订阅，无数据库、面板或转换服务
 - 🌐 **双栈支持** - 自动检测 IPv4/IPv6，支持用户选择
 - 🔑 **密钥管理** - 自动生成 UUID、Reality 密钥对、Short ID 等
@@ -222,20 +223,35 @@ docker-singbox/
 3. 选择 `docker-singbox/config/clash.yaml`
 4. 启用配置并选择节点
 
-> 说明：订阅使用通用 `gfw.txt` 域名规则集，并包含 VLESS Reality、Hysteria2 和 TUIC 节点；请使用较新版本的 FlClash、Stash 或 Mihomo/OpenClash，传统 Clash 内核无法完整识别这些协议。
+> 说明：订阅使用 MetaCubeX MRS 域名/IP 规则集，并包含 VLESS Reality、Hysteria2 和 TUIC 节点；请使用较新版本的 FlClash、Stash 或 Mihomo/OpenClash，传统 Clash 内核无法完整识别这些协议和 MRS 规则。
 
-### GFW 黑名单分流
+### 精简大陆白名单分流
 
 生成的订阅固定使用 `mode: rule`，规则顺序为：
 
-1. 本地域名和私网地址直连
+1. 私有域名直连
 2. 少量人工直连覆盖规则
-3. 命中 GFW TXT 规则集的域名走 `PROXY`
-4. 其余所有流量由 `MATCH,DIRECT` 直连
+3. GFW 域名优先走 `PROXY`
+4. 中国大陆域名、私网 IP 和中国大陆 IP 直连
+5. 其余所有流量由 `MATCH,PROXY` 代理
 
-GFW 规则来自 `Loyalsoldier/clash-rules` 的 `gfw.txt`。该文件名以 `.txt` 结尾，但内容是通用的 Clash YAML `payload`，所以配置中使用 `format: yaml`。客户端通过 `rule-providers` 每 86400 秒检查一次更新；成功更新时覆盖本地缓存，不会把每天的列表持续追加到内存或磁盘。配置不再加载 `reject.txt`、`direct.txt`、`tld-not-cn.txt`、中国 IP 等大型或与严格黑名单语义不符的规则集。
+规则来自 `MetaCubeX/meta-rules-dat`，只加载 `private_domain`、`gfw_domain`、`cn_domain`、`private_ip` 和 `cn_ip` 五个 MRS 集合，当前总下载大小约 590 KB。客户端通过 `rule-providers` 每 86400 秒检查一次更新；成功更新时覆盖本地缓存，不会把每天的列表持续追加到内存或磁盘。
+
+大陆白名单将“无法识别”的流量默认交给代理。即使 DoH、ECH 或 DNS 缓存使域名不可见，国外网站也不会因为落入直连兜底而被阻断；代价是少量无法识别的境外可直连流量也会使用 VPS。
 
 > 该分流由客户端执行。只有导入完整订阅并保持 `Rule` 模式时才会生效；仅复制单个节点链接，或者手动切换到 `Global` 模式，无法由 VPS 强制执行本地直连。
+
+### DoH 与域名嗅探
+
+订阅原生启用 Mihomo 的 HTTP Host、TLS SNI 和 QUIC 嗅探，并同时开启 DNS 映射和纯 IP 嗅探。嗅探只读取路由所需的握手元数据，不会解密 HTTPS 正文。
+
+Nikki 等路由器插件可能用自身的 Mixin 覆盖订阅中的 `sniffer`。如果运行配置里没有 `sniffer`，请在 Nikki 的 Mixin 设置中同时启用：
+
+1. Sniffer 总开关
+2. Sniff Redir-Host
+3. Sniff Pure IP
+4. Overwrite Sniff By Protocol
+5. HTTP、TLS、QUIC 三个协议项
 
 ### 二维码扫描
 
@@ -350,15 +366,15 @@ brew install qrencode
 
 脚本部署时完成的是 VPS 本机订阅校验；公网可达性仍取决于防火墙、安全组和上游网络。
 
-### 9. GFW 规则没有更新？
+### 9. MRS 规则没有更新？
 
-订阅配置和 GFW 规则是两个独立的更新请求。订阅导入成功后，客户端还需要访问：
+订阅配置和 MRS 规则是独立的更新请求。订阅导入成功后，客户端还需要能够访问 MetaCubeX 规则 CDN，例如：
 
 ```text
-https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/gfw.txt
+https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/gfw.mrs
 ```
 
-请检查客户端的 Rule Provider 页面或日志中 `gfw` 的更新时间。规则默认每 24 小时检查一次；首次下载失败时，可在网络恢复后手动刷新规则或重新更新订阅。
+请检查客户端 Rule Provider 页面中的 `private_domain`、`gfw_domain`、`cn_domain`、`private_ip` 和 `cn_ip`。规则默认每 24 小时检查一次；首次下载失败时，可在网络恢复后手动刷新规则或重新更新订阅。
 
 ## 🔧 故障排查
 
